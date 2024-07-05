@@ -5,9 +5,10 @@ from sensor_msgs.msg import CompressedImage
 from cv_bridge import CvBridge, CvBridgeError
 import cv2
 import numpy as np
+import os
 import sys
-sys.path.append('/home/haydentedrake/Desktop')
-from dino_vit_features.cosegmentation import find_cosegmentation, draw_cosegmentation_binary_masks, draw_cosegmentation
+sys.path.append(os.path.dirname(os.path.abspath(__file__)) + '/../src')
+from cosegmentation import find_cosegmentation, draw_cosegmentation_binary_masks, draw_cosegmentation
 
 class ImageDetector:
     def __init__(self):
