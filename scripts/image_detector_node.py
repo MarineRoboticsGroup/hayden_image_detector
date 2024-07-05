@@ -6,8 +6,8 @@ from cv_bridge import CvBridge, CvBridgeError
 import cv2
 import numpy as np
 import sys
-sys.path.append('/home/haydentedrake/Desktop/dino-vit-features')
-from dino_vit_features.cosegmentation import hi
+sys.path.append('/home/haydentedrake/Desktop')
+from dino_vit_features.cosegmentation import find_cosegmentation, draw_cosegmentation_binary_masks, draw_cosegmentation
 
 class ImageDetector:
     def __init__(self):
@@ -24,14 +24,14 @@ class ImageDetector:
             compressed_image = CompressedImage()
             compressed_image.header = data.header
             compressed_image.format = "jpeg"
-            compressed_image.data = np.array(cv2.imencode('.jpg', detections)[1]).tostring()
+            compressed_image.data = np.array(cv2.imencode('.jpg', detections)[1]).tobytes()
             self.detection_pub.publish(compressed_image)
         except CvBridgeError as e:
-            rospy.logerr(e)
+            rospy.logerr("CvBridgeError: %s", e)
        
     def detect_objects(self, image):
-        hi()
-        print("Got image")
+        masks = find_cosegmentation(image)
+        result_image = draw_cosegmentation(image, masks)
         return image
 
 def main():
