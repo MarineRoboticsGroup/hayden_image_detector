@@ -2,7 +2,7 @@ import argparse
 import torch
 from pathlib import Path
 from torchvision import transforms
-from extractor import ViTExtractor
+from dino_vit_features.extractor import ViTExtractor
 from tqdm import tqdm
 import numpy as np
 import faiss
@@ -12,7 +12,7 @@ import cv2
 from typing import List, Tuple
 
 
-def find_cosegmentation(image_paths: List[str], elbow: float = 0.975, load_size: int = 224, layer: int = 11,
+def find_cosegmentation(image: np.ndarray, elbow: float = 0.975, load_size: int = 224, layer: int = 11,
                         facet: str = 'key', bin: bool = False, thresh: float = 0.065, model_type: str = 'dino_vits8',
                         stride: int = 4, votes_percentage: int = 75, sample_interval: int = 100,
                         remove_outliers: bool = False, outliers_thresh: float = 0.7, low_res_saliency_maps: bool = True,
@@ -50,47 +50,59 @@ def find_cosegmentation(image_paths: List[str], elbow: float = 0.975, load_size:
         saliency_extractor = extractor
     if remove_outliers:
         cls_descriptors = []
-    num_images = len(image_paths)
+    num_images = 1
     if save_dir is not None:
         save_dir = Path(save_dir)
 
     # extract descriptors and saliency maps for each image
-    for image_path in image_paths:
-        image_batch, image_pil = extractor.preprocess(image_path, load_size)
-        image_pil_list.append(image_pil)
-        include_cls = remove_outliers  # removing outlier images requires the cls descriptor.
-        descs = extractor.extract_descriptors(image_batch.to(device), layer, facet, bin, include_cls).cpu().numpy()
-        curr_num_patches, curr_load_size = extractor.num_patches, extractor.load_size
-        num_patches_list.append(curr_num_patches)
-        load_size_list.append(curr_load_size)
-        if remove_outliers:
-            cls_descriptor, descs = torch.from_numpy(descs[:, :, 0, :]), descs[:, :, 1:, :]
-            cls_descriptors.append(cls_descriptor)
-        descriptors_list.append(descs)
-        if low_res_saliency_maps:
-            if load_size is not None:
-                low_res_load_size = (curr_load_size[0] // 2, curr_load_size[1] // 2)
-            else:
-                low_res_load_size = curr_load_size
-            image_batch, _ = saliency_extractor.preprocess(image_path, low_res_load_size)
+    # HT: modified this from the original dino repo, which was loading from disk 
+    # image_batch, image_pil = extractor.preprocess(image_path, load_size)
+    # Convert the numpy array to a PIL image
+    image_pil = Image.fromarray(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
+    
+    # Apply the necessary transformations
+    if load_size is not None:
+        image_pil = transforms.Resize(load_size, interpolation=transforms.InterpolationMode.LANCZOS)(image_pil)
+    prep = transforms.Compose([
+        transforms.ToTensor(),
+        transforms.Normalize(mean=extractor.mean, std=extractor.std)
+    ])
+    image_batch = prep(image_pil)[None, ...]  # Add batch dimension
 
-        saliency_map = saliency_extractor.extract_saliency_maps(image_batch.to(device)).cpu().numpy()
-        curr_sal_num_patches, curr_sal_load_size = saliency_extractor.num_patches, saliency_extractor.load_size
-        if low_res_saliency_maps:
-            reshape_op = transforms.Resize(curr_num_patches, transforms.InterpolationMode.NEAREST)
-            saliency_map = np.array(reshape_op(Image.fromarray(saliency_map.reshape(curr_sal_num_patches)))).flatten()
+    image_pil_list.append(image_pil)
+    include_cls = remove_outliers  # removing outlier images requires the cls descriptor.
+    descs = extractor.extract_descriptors(image_batch.to(device), layer, facet, bin, include_cls).cpu().detach().numpy()
+    curr_num_patches, curr_load_size = extractor.num_patches, extractor.load_size
+    num_patches_list.append(curr_num_patches)
+    load_size_list.append(curr_load_size)
+    if remove_outliers:
+        cls_descriptor, descs = torch.from_numpy(descs[:, :, 0, :]), descs[:, :, 1:, :]
+        cls_descriptors.append(cls_descriptor)
+    descriptors_list.append(descs)
+    if low_res_saliency_maps:
+        if load_size is not None:
+            low_res_load_size = (curr_load_size[0] // 2, curr_load_size[1] // 2)
         else:
-            saliency_map = saliency_map[0]
-        saliency_maps_list.append(saliency_map)
+            low_res_load_size = curr_load_size
+        image_batch, _ = saliency_extractor.preprocess(image_path, low_res_load_size)
 
-        # save saliency maps and resized images if needed
-        if save_dir is not None:
-            fig, ax = plt.subplots()
-            ax.axis('off')
-            ax.imshow(saliency_maps_list[-1].reshape(num_patches_list[-1]), vmin=0, vmax=1, cmap='jet')
-            fig.savefig(save_dir / f'{Path(image_path).stem}_saliency_map.png', bbox_inches='tight', pad_inches=0)
-            plt.close(fig)
-            image_pil.save(save_dir / f'{Path(image_path).stem}_resized.png')
+    saliency_map = saliency_extractor.extract_saliency_maps(image_batch.to(device)).cpu().detach().numpy()
+    curr_sal_num_patches, curr_sal_load_size = saliency_extractor.num_patches, saliency_extractor.load_size
+    if low_res_saliency_maps:
+        reshape_op = transforms.Resize(curr_num_patches, transforms.InterpolationMode.NEAREST)
+        saliency_map = np.array(reshape_op(Image.fromarray(saliency_map.reshape(curr_sal_num_patches)))).flatten()
+    else:
+        saliency_map = saliency_map[0]
+    saliency_maps_list.append(saliency_map)
+
+    # save saliency maps and resized images if needed
+    if save_dir is not None:
+        fig, ax = plt.subplots()
+        ax.axis('off')
+        ax.imshow(saliency_maps_list[-1].reshape(num_patches_list[-1]), vmin=0, vmax=1, cmap='jet')
+        fig.savefig(save_dir / f'{Path(image_path).stem}_saliency_map.png', bbox_inches='tight', pad_inches=0)
+        plt.close(fig)
+        image_pil.save(save_dir / f'{Path(image_path).stem}_resized.png')
 
     if remove_outliers:
         all_cls_descriptors = torch.stack(cls_descriptors, dim=2)[0, 0]
