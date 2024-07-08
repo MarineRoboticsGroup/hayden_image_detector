@@ -1,5 +1,4 @@
 #!/usr/bin/env python
-
 import rospy
 from sensor_msgs.msg import CompressedImage
 from cv_bridge import CvBridge, CvBridgeError
@@ -7,10 +6,14 @@ import cv2
 import numpy as np
 import os
 import sys
+
 # Hack for now until we set the PYTHONPATH properly
-sys.path.append('/home/haydentedrake/Desktop')
-sys.path.append(os.path.dirname(os.path.abspath(__file__)) + '/../src')
+sys.path.append('/home/haydentedrake/Desktop/dino_vit_features')
+#sys.path.append(os.path.dirname(os.path.abspath(__file__)) + '/../src')
+
 from cosegmentation import find_cosegmentation, draw_cosegmentation_binary_masks, draw_cosegmentation
+
+import matplotlib.pyplot as plt
 
 class ImageDetector:
     def __init__(self):

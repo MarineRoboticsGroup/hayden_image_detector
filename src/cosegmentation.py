@@ -2,7 +2,8 @@ import argparse
 import torch
 from pathlib import Path
 from torchvision import transforms
-from dino_vit_features.extractor import ViTExtractor
+sys.path.append('/home/haydentedrake/Desktop/dino_vit_features')
+from dino_vit_features.extractor import VITExtractor
 from tqdm import tqdm
 import numpy as np
 import faiss
@@ -10,6 +11,62 @@ from PIL import Image
 import matplotlib.pyplot as plt
 import cv2
 from typing import List, Tuple
+from ultralytics import YOLO
+import rospy
+from sensor_msgs.msg import Image as RosImage
+from cv_bridge import CvBridge
+import message_filters
+
+class ClosedSetDetector:
+    """
+    This holds an instance of YOLOv8 and runs inference
+    """
+    def __init__(self) -> None:
+        assert torch.cuda.is_available()
+        model_file = "/home/singhk/topside_ws/src/maxmixtures/opti-acoustic-semantics/runs/detect/train/weights/last.pt"
+        self.model = YOLO(model_file)
+        rospy.loginfo("Model loaded")
+        self.img_pub = rospy.Publisher("/camera/yolo_img", RosImage, queue_size=10)
+        self.br = CvBridge()
+        # Set up synchronized subscriber
+        # sdr bluerov params
+        rgb_topic = rospy.get_param("rgb_topic", "/usb_cam/image_raw_repub")
+        sonar_topic = rospy.get_param(
+            "sonar_topic", "/sonar_vertical/oculus_node/cloud"
+        )
+        self.rgb_img_sub = message_filters.Subscriber(rgb_topic, Image, queue_size=1)
+        self.sonar_img_sub = message_filters.Subscriber(
+            sonar_topic, RosImage, queue_size=1
+        )
+        # Synchronizer for RGB and depth images
+        self.sync = message_filters.ApproximateTimeSynchronizer(
+            (self.rgb_img_sub, self.depth_img_sub), 100, 1
+        )
+        self.sync.registerCallback(self.forward_pass)
+    
+    def forward_pass(self, rgb: Image, sonar: RosImage) -> None:
+        """
+        Run YOLOv8 on the image and extract all segmented masks
+        """
+        image_cv = self.br.imgmsg_to_cv2(rgb, desired_encoding="bgr8")
+        results = self.model(image_cv, verbose=False, conf=CONF_THRESH)[0]
+        if (results.boxes is None):
+            return
+        for r in results:
+            im_array = r.plot()  # plot a BGR numpy array of predictions
+            im = PILImage.fromarray(im_array[..., ::-1])  # RGB PIL image
+            msg_yolo_detections = RosImage()
+            msg_yolo_detections.header.stamp = rgb.header.stamp
+            msg_yolo_detections.height = im.height
+            msg_yolo_detections.width = im.width
+            msg_yolo_detections.encoding = "rgb8"
+            msg_yolo_detections.is_bigendian = False
+            msg_yolo_detections.step = 3 * im.width
+            msg_yolo_detections.data = np.array(im).tobytes()
+            self.img_pub.publish(msg_yolo_detections)
+        class_ids = results.boxes.cls.data.cpu().numpy()
+        bboxes = results.boxes.xywh.data.cpu().numpy()
+        confs = results.boxes.conf.data.cpu().numpy()
 
 
 def find_cosegmentation(image: np.ndarray, elbow: float = 0.975, load_size: int = 224, layer: int = 11,
@@ -75,9 +132,9 @@ def find_cosegmentation(image: np.ndarray, elbow: float = 0.975, load_size: int 
     curr_num_patches, curr_load_size = extractor.num_patches, extractor.load_size
     num_patches_list.append(curr_num_patches)
     load_size_list.append(curr_load_size)
-    if remove_outliers:
-        cls_descriptor, descs = torch.from_numpy(descs[:, :, 0, :]), descs[:, :, 1:, :]
-        cls_descriptors.append(cls_descriptor)
+    #if remove_outliers:
+        #cls_descriptor, descs = torch.from_numpy(descs[:, :, 0, :]), descs[:, :, 1:, :]
+        #cls_descriptors.append(cls_descriptor)
     descriptors_list.append(descs)
     if low_res_saliency_maps:
         if load_size is not None:
@@ -104,119 +161,121 @@ def find_cosegmentation(image: np.ndarray, elbow: float = 0.975, load_size: int 
         plt.close(fig)
         image_pil.save(save_dir / f'{Path(image_path).stem}_resized.png')
 
-    if remove_outliers:
-        all_cls_descriptors = torch.stack(cls_descriptors, dim=2)[0, 0]
-        mean_cls_descriptor = torch.mean(all_cls_descriptors, dim=0)[None, ...]
-        cos_sim = torch.nn.CosineSimilarity(dim=1)
-        similarities_to_mean = cos_sim(all_cls_descriptors, mean_cls_descriptor)
-        inliers_idx = torch.where(similarities_to_mean >= outliers_thresh)[0]
-        inlier_image_paths, outlier_image_paths = [], []
-        inlier_descriptors, outlier_descriptors = [], []
-        inlier_saliency_maps, outlier_saliency_maps = [], []
-        inlier_image_pil, outlier_image_pil = [], []
-        inlier_num_patches, outlier_num_patches = [], []
-        inlier_load_size, outlier_load_size = [], []
-        for idx, (image_path, descriptor, saliency_map, pil_image, num_patches, load_size) in enumerate(zip(image_paths,
-                descriptors_list, saliency_maps_list, image_pil_list, num_patches_list, load_size_list)):
-            (inlier_image_paths if idx in inliers_idx else outlier_image_paths).append(image_path)
-            (inlier_descriptors if idx in inliers_idx else outlier_descriptors).append(descriptor)
-            (inlier_saliency_maps if idx in inliers_idx else outlier_saliency_maps).append(saliency_map)
-            (inlier_image_pil if idx in inliers_idx else outlier_image_pil).append(pil_image)
-            (inlier_num_patches if idx in inliers_idx else outlier_num_patches).append(num_patches)
-            (inlier_load_size if idx in inliers_idx else outlier_load_size).append(load_size)
-        image_paths = inlier_image_paths
-        descriptors_list = inlier_descriptors
-        saliency_maps_list = inlier_saliency_maps
-        image_pil_list = inlier_image_pil
-        num_patches_list = inlier_num_patches
-        load_size_list = inlier_load_size
-        num_images = len(inliers_idx)
+    return saliency_maps_list, image_pil_list
+
+    #if remove_outliers:
+        #all_cls_descriptors = torch.stack(cls_descriptors, dim=2)[0, 0]
+        #mean_cls_descriptor = torch.mean(all_cls_descriptors, dim=0)[None, ...]
+        #cos_sim = torch.nn.CosineSimilarity(dim=1)
+        #similarities_to_mean = cos_sim(all_cls_descriptors, mean_cls_descriptor)
+        #inliers_idx = torch.where(similarities_to_mean >= outliers_thresh)[0]
+        #inlier_image_paths, outlier_image_paths = [], []
+        #inlier_descriptors, outlier_descriptors = [], []
+        #inlier_saliency_maps, outlier_saliency_maps = [], []
+        #inlier_image_pil, outlier_image_pil = [], []
+        #inlier_num_patches, outlier_num_patches = [], []
+        #inlier_load_size, outlier_load_size = [], []
+        #for idx, (image_path, descriptor, saliency_map, pil_image, num_patches, load_size) in enumerate(zip(image_paths,
+                #descriptors_list, saliency_maps_list, image_pil_list, num_patches_list, load_size_list)):
+            #(inlier_image_paths if idx in inliers_idx else outlier_image_paths).append(image_path)
+            #(inlier_descriptors if idx in inliers_idx else outlier_descriptors).append(descriptor)
+            #(inlier_saliency_maps if idx in inliers_idx else outlier_saliency_maps).append(saliency_map)
+            #(inlier_image_pil if idx in inliers_idx else outlier_image_pil).append(pil_image)
+            #(inlier_num_patches if idx in inliers_idx else outlier_num_patches).append(num_patches)
+            #(inlier_load_size if idx in inliers_idx else outlier_load_size).append(load_size)
+        #image_paths = inlier_image_paths
+        #descriptors_list = inlier_descriptors
+        #saliency_maps_list = inlier_saliency_maps
+        #image_pil_list = inlier_image_pil
+        #num_patches_list = inlier_num_patches
+        #load_size_list = inlier_load_size
+        #num_images = len(inliers_idx)
 
     # cluster all images using k-means:
-    all_descriptors = np.ascontiguousarray(np.concatenate(descriptors_list, axis=2)[0, 0])
-    normalized_all_descriptors = all_descriptors.astype(np.float32)
-    faiss.normalize_L2(normalized_all_descriptors)  # in-place operation
-    sampled_descriptors_list = [x[:, :, ::sample_interval, :] for x in descriptors_list]
-    all_sampled_descriptors = np.ascontiguousarray(np.concatenate(sampled_descriptors_list, axis=2)[0, 0])
-    normalized_all_sampled_descriptors = all_sampled_descriptors.astype(np.float32)
-    faiss.normalize_L2(normalized_all_sampled_descriptors)  # in-place operation
+    #all_descriptors = np.ascontiguousarray(np.concatenate(descriptors_list, axis=2)[0, 0])
+    #normalized_all_descriptors = all_descriptors.astype(np.float32)
+    #faiss.normalize_L2(normalized_all_descriptors)  # in-place operation
+    #sampled_descriptors_list = [x[:, :, ::sample_interval, :] for x in descriptors_list]
+    #all_sampled_descriptors = np.ascontiguousarray(np.concatenate(sampled_descriptors_list, axis=2)[0, 0])
+    #normalized_all_sampled_descriptors = all_sampled_descriptors.astype(np.float32)
+    #faiss.normalize_L2(normalized_all_sampled_descriptors)  # in-place operation
 
-    sum_of_squared_dists = []
-    n_cluster_range = list(range(1, 15))
-    for n_clusters in n_cluster_range:
-        algorithm = faiss.Kmeans(d=normalized_all_sampled_descriptors.shape[1], k=n_clusters, niter=300, nredo=10)
-        algorithm.train(normalized_all_sampled_descriptors.astype(np.float32))
-        squared_distances, labels = algorithm.index.search(normalized_all_descriptors.astype(np.float32), 1)
-        objective = squared_distances.sum()
-        sum_of_squared_dists.append(objective / normalized_all_descriptors.shape[0])
-        if (len(sum_of_squared_dists) > 1 and sum_of_squared_dists[-1] > elbow * sum_of_squared_dists[-2]):
-            break
+    #sum_of_squared_dists = []
+    #n_cluster_range = list(range(1, 15))
+    #for n_clusters in n_cluster_range:
+        #algorithm = faiss.Kmeans(d=normalized_all_sampled_descriptors.shape[1], k=n_clusters, niter=300, nredo=10)
+        #algorithm.train(normalized_all_sampled_descriptors.astype(np.float32))
+        #squared_distances, labels = algorithm.index.search(normalized_all_descriptors.astype(np.float32), 1)
+        #objective = squared_distances.sum()
+        #sum_of_squared_dists.append(objective / normalized_all_descriptors.shape[0])
+        #if (len(sum_of_squared_dists) > 1 and sum_of_squared_dists[-1] > elbow * sum_of_squared_dists[-2]):
+            #break
 
-    num_labels = np.max(n_clusters) + 1
-    num_descriptors_per_image = [num_patches[0]*num_patches[1] for num_patches in num_patches_list]
-    labels_per_image = np.split(labels, np.cumsum(num_descriptors_per_image))
+    #num_labels = np.max(n_clusters) + 1
+    #num_descriptors_per_image = [num_patches[0]*num_patches[1] for num_patches in num_patches_list]
+    #labels_per_image = np.split(labels, np.cumsum(num_descriptors_per_image))
 
-    if save_dir is not None:
-        cmap = 'jet' if num_labels > 10 else 'tab10'
-        for image_path, num_patches, label_per_image in zip(image_paths, num_patches_list, labels_per_image):
-            fig, ax = plt.subplots()
-            ax.axis('off')
-            ax.imshow(label_per_image.reshape(num_patches), vmin=0, vmax=num_labels-1, cmap=cmap)
-            fig.savefig(save_dir / f'{Path(image_path).stem}_clustering.png', bbox_inches='tight', pad_inches=0)
-            plt.close(fig)
+    #if save_dir is not None:
+        #cmap = 'jet' if num_labels > 10 else 'tab10'
+        #for image_path, num_patches, label_per_image in zip(image_paths, num_patches_list, labels_per_image):
+            #fig, ax = plt.subplots()
+            #ax.axis('off')
+            #ax.imshow(label_per_image.reshape(num_patches), vmin=0, vmax=num_labels-1, cmap=cmap)
+            #fig.savefig(save_dir / f'{Path(image_path).stem}_clustering.png', bbox_inches='tight', pad_inches=0)
+            #plt.close(fig)
 
     # use saliency maps to vote for salient clusters
-    votes = np.zeros(num_labels)
-    for image_labels, saliency_map in zip(labels_per_image, saliency_maps_list):
-        for label in range(num_labels):
-            label_saliency = saliency_map[image_labels[:, 0] == label].mean()
-            if label_saliency > thresh:
-                votes[label] += 1
-    salient_labels = np.where(votes >= np.ceil(num_images * votes_percentage / 100))
+    #votes = np.zeros(num_labels)
+    #for image_labels, saliency_map in zip(labels_per_image, saliency_maps_list):
+        #for label in range(num_labels):
+            #label_saliency = saliency_map[image_labels[:, 0] == label].mean()
+            #if label_saliency > thresh:
+                #votes[label] += 1
+    #salient_labels = np.where(votes >= np.ceil(num_images * votes_percentage / 100))
     # create masks using the salient labels
-    segmentation_masks = []
-    for img, labels, num_patches, load_size in zip(image_pil_list, labels_per_image, num_patches_list, load_size_list):
-        mask = np.isin(labels, salient_labels).reshape(num_patches)
-        resized_mask = np.array(Image.fromarray(mask).resize((load_size[1], load_size[0]), resample=Image.LANCZOS))
-        try:
+    #segmentation_masks = []
+    #for img, labels, num_patches, load_size in zip(image_pil_list, labels_per_image, num_patches_list, load_size_list):
+        #mask = np.isin(labels, salient_labels).reshape(num_patches)
+        #resized_mask = np.array(Image.fromarray(mask).resize((load_size[1], load_size[0]), resample=Image.LANCZOS))
+        #try:
             # apply grabcut on mask
-            grabcut_kernel_size = (7, 7)
-            kernel = np.ones(grabcut_kernel_size, np.uint8)
-            forground_mask = cv2.erode(np.uint8(resized_mask), kernel)
-            forground_mask = np.array(Image.fromarray(forground_mask).resize(img.size, Image.NEAREST))
-            background_mask = cv2.erode(np.uint8(1 - resized_mask), kernel)
-            background_mask = np.array(Image.fromarray(background_mask).resize(img.size, Image.NEAREST))
-            full_mask = np.ones((load_size[0], load_size[1]), np.uint8) * cv2.GC_PR_FGD
-            full_mask[background_mask == 1] = cv2.GC_BGD
-            full_mask[forground_mask == 1] = cv2.GC_FGD
-            bgdModel = np.zeros((1, 65), np.float64)
-            fgdModel = np.zeros((1, 65), np.float64)
-            cv2.grabCut(np.array(img), full_mask, None, bgdModel, fgdModel, 5, cv2.GC_INIT_WITH_MASK)
-            grabcut_mask = np.where((full_mask == 2) | (full_mask == 0), 0, 1).astype('uint8')
-        except Exception:
+            #grabcut_kernel_size = (7, 7)
+            #kernel = np.ones(grabcut_kernel_size, np.uint8)
+            #forground_mask = cv2.erode(np.uint8(resized_mask), kernel)
+            #forground_mask = np.array(Image.fromarray(forground_mask).resize(img.size, Image.NEAREST))
+            #background_mask = cv2.erode(np.uint8(1 - resized_mask), kernel)
+            #background_mask = np.array(Image.fromarray(background_mask).resize(img.size, Image.NEAREST))
+            #full_mask = np.ones((load_size[0], load_size[1]), np.uint8) * cv2.GC_PR_FGD
+            #full_mask[background_mask == 1] = cv2.GC_BGD
+            #full_mask[forground_mask == 1] = cv2.GC_FGD
+            #bgdModel = np.zeros((1, 65), np.float64)
+            #fgdModel = np.zeros((1, 65), np.float64)
+            #cv2.grabCut(np.array(img), full_mask, None, bgdModel, fgdModel, 5, cv2.GC_INIT_WITH_MASK)
+            #grabcut_mask = np.where((full_mask == 2) | (full_mask == 0), 0, 1).astype('uint8')
+        #except Exception:
             # if mask is unfitted from gb (e.g. all zeros) -- don't apply it
-            grabcut_mask = resized_mask.astype('uint8')
+            #grabcut_mask = resized_mask.astype('uint8')
 
-        grabcut_mask = Image.fromarray(np.array(grabcut_mask, dtype=bool))
-        segmentation_masks.append(grabcut_mask)
+        #grabcut_mask = Image.fromarray(np.array(grabcut_mask, dtype=bool))
+        #segmentation_masks.append(grabcut_mask)
 
-    if remove_outliers:
-        outlier_segmentation_masks = []
-        for load_size in outlier_load_size:
-            outlier_segmentation_masks.append(Image.fromarray(np.zeros(load_size, dtype=bool)))
+    #if remove_outliers:
+        #outlier_segmentation_masks = []
+        #for load_size in outlier_load_size:
+            #outlier_segmentation_masks.append(Image.fromarray(np.zeros(load_size, dtype=bool)))
 
-        final_segmentation_masks, final_pil_images = [], []
-        for idx in range(len(image_paths)):
-            if idx in inliers_idx:
-                final_segmentation_masks.append(segmentation_masks.pop(0))
-                final_pil_images.append(image_pil_list.pop(0))
-            else:
-                final_segmentation_masks.append(outlier_segmentation_masks.pop(0))
-                final_pil_images.append(outlier_image_pil.pop(0))
-        segmentation_masks = final_segmentation_masks
-        image_pil_list = final_pil_images
+        #final_segmentation_masks, final_pil_images = [], []
+        #for idx in range(len(image_paths)):
+            #if idx in inliers_idx:
+                #final_segmentation_masks.append(segmentation_masks.pop(0))
+                #final_pil_images.append(image_pil_list.pop(0))
+            #else:
+                #final_segmentation_masks.append(outlier_segmentation_masks.pop(0))
+                #final_pil_images.append(outlier_image_pil.pop(0))
+        #segmentation_masks = final_segmentation_masks
+        #image_pil_list = final_pil_images
 
-    return segmentation_masks, image_pil_list
+    #return segmentation_masks, image_pil_list
 
 
 def draw_cosegmentation(segmentation_masks: List[Image.Image], pil_images: List[Image.Image]) -> List[plt.Figure]:
@@ -231,10 +290,16 @@ def draw_cosegmentation(segmentation_masks: List[Image.Image], pil_images: List[
         # make bg transparent in image
         np_image = np.array(pil_image)
         np_mask = np.array(seg_mask)
-        stacked_mask = np.dstack(3 * [seg_mask])
-        masked_image = np.array(pil_image)
+        np_mask = cv2.resize(np_mask, (np_image.shape[1], np_image.shape[0]), interpolation=cv2.INTER_NEAREST)
+        np_mask = np_mask.astype(bool)
+        stacked_mask = np.dstack([np_mask]*3)
+        masked_image = np_image.copy()
         masked_image[~stacked_mask] = 0
-        masked_image_transparent = np.concatenate((masked_image, 255. * np_mask.astype(np.int32)[..., None]), axis=-1)
+        masked_image_transparent = np.concatenate((masked_image, 255 * np_mask[..., None]), axis=-1)
+        #stacked_mask = np.dstack(3 * [seg_mask])
+        #masked_image = np.array(pil_image)
+        #masked_image[~stacked_mask] = 0
+        #masked_image_transparent = np.concatenate((masked_image, 255. * np_mask.astype(np.int32)[..., None]), axis=-1)
 
         # create chessboard bg
         chessboard_bg = np.zeros(np_image.shape[:2])
