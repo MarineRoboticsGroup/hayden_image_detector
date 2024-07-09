@@ -12,7 +12,7 @@ import cv2
 from typing import List, Tuple
 
 
-def find_cosegmentation(image: np.ndarray, elbow: float = 0.975, load_size: int = 224, layer: int = 11,
+def find_cosegmentation(image: np.ndarray, elbow: float = 0.975, load_size: int = 200, layer: int = 11,
                         facet: str = 'key', bin: bool = False, thresh: float = 0.065, model_type: str = 'dino_vits8',
                         stride: int = 4, votes_percentage: int = 75, sample_interval: int = 100,
                         remove_outliers: bool = False, outliers_thresh: float = 0.7, low_res_saliency_maps: bool = True,
