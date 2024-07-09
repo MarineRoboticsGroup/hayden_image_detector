@@ -19,40 +19,46 @@ class ClosedSetDetector:
     """
     def __init__(self) -> None:
         assert torch.cuda.is_available()
-        model_file = "/home/singhk/topside_ws/src/maxmixtures/opti-acoustic-semantics/runs/detect/train/weights/last.pt"
+        model_file = "/home/haydentedrake/Downloads/last.pt"
         self.model = YOLO(model_file)
         rospy.loginfo("Model loaded")
-        self.objs_pub = rospy.Publisher("/camera/objects", ObjectsVector, queue_size=10)
         self.img_pub = rospy.Publisher("/camera/yolo_img", RosImage, queue_size=10)
         self.br = CvBridge()
         # Set up synchronized subscriber
         # sdr bluerov params
         rgb_topic = rospy.get_param("rgb_topic", "/usb_cam/image_raw_repub")
         depth_topic = rospy.get_param(
-            "depth_topic", "/sonar_oculus_node/M750d/ping"
+            "depth_topic", "/sonar_vertical/oculus_node/ping"
+        )
+        sonar_image_topic = rospy.get_param(
+            "depth_topic", "/sonar_vertical/oculus_viewer/image"
         )
         self.rgb_img_sub = message_filters.Subscriber(rgb_topic, Image, queue_size=1)
         self.depth_img_sub = message_filters.Subscriber(
             depth_topic, OculusPing, queue_size=1
         )
+        self.sonar_image_img_sub = message_filters.Subscriber(
+            sonar_image_topic, Image, queue_size=1
+        )
         # Synchronizer for RGB and depth images
         self.sync = message_filters.ApproximateTimeSynchronizer(
-            (self.rgb_img_sub, self.depth_img_sub), 100, 1
+            (self.rgb_img_sub, self.depth_img_sub, self.sonar_image_img_sub), 100, 1
         )
         self.sync.registerCallback(self.forward_pass)
-    def forward_pass(self, rgb: Image, depth: OculusPing) -> None:
+
+    def forward_pass(self, rgb: Image, depth: OculusPing, sonar_image: Image) -> None:
         """
         Run YOLOv8 on the image and extract all segmented masks
         """
-        objects = ObjectsVector()
-        objects.header = rgb.header
-        objects.objects = []
+        print("IN CALLBACK")
         image_cv = self.br.imgmsg_to_cv2(rgb, desired_encoding="bgr8")
         # Run inference args: https://docs.ultralytics.com/modes/predict/#inference-arguments
         #results = self.model(image_cv, verbose=False, conf=CONF_THRESH, imgsz=(736, 1280))[0] # do this for realsense (img dim not a multiple of max stride length 32)
+        CONF_THRESH=0.2
         results = self.model(image_cv, verbose=False, conf=CONF_THRESH)[0]
         # Extract segmentation masks
         if (results.boxes is None):
+            print("NO DETECTIONS")
             return
         # Show the results
         for r in results:
@@ -77,9 +83,4 @@ if __name__ == "__main__":
     rospy.init_node("closed_set_detector")
     detector = ClosedSetDetector()
     bridge = CvBridge()
-    CAM_FOV = 80 # degrees
-    calib_file_loc = '/home/singhk/data/building_1_pool/bluerov_1080_cal.yaml'
-    with open(calib_file_loc) as stream:
-        cam_info = yaml.safe_load(stream)
-    K = np.array(cam_info['camera_matrix']['data']).reshape(3,3)
     rospy.spin()
