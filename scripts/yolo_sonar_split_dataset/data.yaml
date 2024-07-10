@@ -1,0 +1,6 @@
+train: ../train/sonar
+val: ../valid/sonar
+test: ../test/sonar
+
+nc: 13
+names: ['80-20', 'fish-cage', 'hand-net', 'ladder', 'lobster-cages', 'paddle', 'pipe', 'recycling-bin', 'seaweed', 'stairs', 'tire', 'towfish', 'trash-bin']
