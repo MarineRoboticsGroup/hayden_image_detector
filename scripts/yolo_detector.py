@@ -13,11 +13,15 @@ import sys
 print("PYTHONPATH:",sys.path)
 from sonar_oculus.msg import OculusPing
 import yaml
+from collections import deque
 
 to_rad = lambda bearing: bearing * np.pi / 18000
 INTENSITY_THRESHOLD = 100
 
 object_names = ['80-20', 'fish-cage', 'hand-net', 'ladder', 'lobster-cages', 'paddle', 'pipe', 'recycling-bin', 'seaweed', 'stairs', 'tire', 'towfish', 'trash-bin']
+
+bearing_queue = deque(maxlen=5)
+coord_history = {}
 
 def ping_to_range(msg: OculusPing, angle: float) -> float:
     """
@@ -52,6 +56,17 @@ def ping_to_range(msg: OculusPing, angle: float) -> float:
             return br
     print(f"No return detected for angle: {angle_rad}")
     return None
+
+def smooth_bearing(bearing):
+    bearing_queue.append(bearing)
+    return sum(bearing_queue) / len(bearing_queue)
+
+def smooth_coordinates(obj_name, coords):
+    if obj_name not in coord_history:
+        coord_history[obj_name] = deque(maxlen=5)
+    coord_history[obj_name].append(coords)
+    avg_coords = np.mean(coord_history[obj_name], axis=0)
+    return int(avg_coords[0], int(avg_coords[1]))
 
 class ClosedSetDetector:
     """
@@ -151,6 +166,11 @@ class ClosedSetDetector:
                 center_y = int((depth.num_ranges - (range / depth.range_resolution)))
 
                 print(f"Calculated coordinates: center_x={center_x}, center_y={center_y}")
+
+                wall_y_threshold = 200
+                if center_y < wall_y_threshold:
+                    print(f"Ignoring detection above wall threshold: center_y={center_y}")
+                    continue
 
                 if 0 <= center_x < sonar_image_cv.shape[1] and 0<= center_y < sonar_image_cv.shape[0]:
                     bbox_size = 100
