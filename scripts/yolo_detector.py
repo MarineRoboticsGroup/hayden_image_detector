@@ -15,13 +15,20 @@ from sonar_oculus.msg import OculusPing
 import yaml
 from collections import deque
 
+print(torch.cuda.is_available())
+print(torch.cuda.device_count())
+print(torch.cuda.current_device())
+print(torch.cuda.get_device_name(0))
+
 to_rad = lambda bearing: bearing * np.pi / 18000
 INTENSITY_THRESHOLD = 100
 
 object_names = ['80-20', 'fish-cage', 'hand-net', 'ladder', 'lobster-cages', 'paddle', 'pipe', 'recycling-bin', 'seaweed', 'stairs', 'tire', 'towfish', 'trash-bin']
 
-bearing_queue = deque(maxlen=5)
+bearing_queue = deque(maxlen=10)
 coord_history = {}
+range_history = deque(maxlen=10)
+detected_coords = None
 
 def ping_to_range(msg: OculusPing, angle: float) -> float:
     """
@@ -34,7 +41,7 @@ def ping_to_range(msg: OculusPing, angle: float) -> float:
     print(f"Ping image shape: {img.shape}")
     # pre-process ping
     #ping = self.sonar.deconvolve(img)
-    ping = img
+    #ping = img
     #print(ping)
     angle_rad = angle * np.pi / 180 # convert to radians
     angular_res = 2.268928027592628 / 512 # radians for oculus m1200d lf and m750d hf/lf assuming even spacing
@@ -49,7 +56,7 @@ def ping_to_range(msg: OculusPing, angle: float) -> float:
     closest_beam = np.argmin(np.abs(az - angle_rad))
     # image is num_ranges x num_beams
     for idx in range(len(img[:, closest_beam])):
-        print(f"Checking beam {closest_beam}, idx {idx}, intensity {img[idx, closest_beam]}")
+        #print(f"Checking beam {closest_beam}, idx {idx}, intensity {img[idx, closest_beam]}")
         if img[idx, closest_beam] > INTENSITY_THRESHOLD:
             br = idx*msg.range_resolution
             print(f"Return detected: beam={closest_beam}, idx={idx}, range={br}, intensity={img[idx, closest_beam]}")
@@ -63,10 +70,14 @@ def smooth_bearing(bearing):
 
 def smooth_coordinates(obj_name, coords):
     if obj_name not in coord_history:
-        coord_history[obj_name] = deque(maxlen=5)
+        coord_history[obj_name] = deque(maxlen=10)
     coord_history[obj_name].append(coords)
     avg_coords = np.mean(coord_history[obj_name], axis=0)
-    return int(avg_coords[0], int(avg_coords[1]))
+    return int(avg_coords[0]), int(avg_coords[1])
+
+def smooth_range(range_value):
+    range_history.append(range_value)
+    return sum(range_history) / len(range_history)
 
 class ClosedSetDetector:
     """
@@ -106,11 +117,12 @@ class ClosedSetDetector:
         """
         Run YOLOv8 on the image and extract all segmented masks
         """
+        global detected_coords
         print("IN CALLBACK")
         image_cv = self.br.imgmsg_to_cv2(rgb, desired_encoding="bgr8")
         # Run inference args: https://docs.ultralytics.com/modes/predict/#inference-arguments
         #results = self.model(image_cv, verbose=False, conf=CONF_THRESH, imgsz=(736, 1280))[0] # do this for realsense (img dim not a multiple of max stride length 32)
-        CONF_THRESH=0.2
+        CONF_THRESH=0.5
         results = self.model(image_cv, verbose=False, conf=CONF_THRESH)[0]
         # Extract segmentation masks
         if (results.boxes is None):
@@ -151,6 +163,7 @@ class ClosedSetDetector:
             obj_name = object_names[class_id]
             obj_centroid = (bbox[0], bbox[1])  # x, y
             bearing = obj_centroid[0]/rgb.width * CAM_FOV - CAM_FOV/2
+            bearing = smooth_bearing(bearing)
             print(obj_centroid)
             print(bearing)
             print(f"Object: {obj_name}, Centroid: {obj_centroid}, Bearing: {bearing}")
@@ -158,6 +171,7 @@ class ClosedSetDetector:
             print(f"Calculated range: {range}")
             
             if range is not None and range > 0:
+                range = smooth_range(range)
                 angle = to_rad(bearing)
                 x = range * np.cos(angle)
                 y = range * np.sin(angle)
@@ -167,29 +181,39 @@ class ClosedSetDetector:
 
                 print(f"Calculated coordinates: center_x={center_x}, center_y={center_y}")
 
-                wall_y_threshold = 200
-                if center_y < wall_y_threshold:
-                    print(f"Ignoring detection above wall threshold: center_y={center_y}")
-                    continue
+                #wall_y_threshold = 200
+                #if center_y < wall_y_threshold:
+                    #print(f"Ignoring detection above wall threshold: center_y={center_y}")
+                    #continue
 
-                if 0 <= center_x < sonar_image_cv.shape[1] and 0<= center_y < sonar_image_cv.shape[0]:
-                    bbox_size = 100
-                    top_left = (center_x - bbox_size // 2, center_y - bbox_size // 2)
-                    bottom_right = (center_x + bbox_size // 2, center_y + bbox_size // 2)
+                center_x, center_y = smooth_coordinates(obj_name, (center_x, center_y))
+
+                detected_coords = (center_x, center_y)
+                rospy.set_param('/detected_coords', detected_coords)
+                print(f"Detected coordinates set to parameter: {detected_coords}")
+
+                #if 0 <= center_x < sonar_image_cv.shape[1] and 0<= center_y < sonar_image_cv.shape[0]:
+                    #bbox_size = 100
+                    #top_left = (center_x - bbox_size // 2, center_y - bbox_size // 2)
+                    #bottom_right = (center_x + bbox_size // 2, center_y + bbox_size // 2)
             
-                    cv2.rectangle(sonar_image_cv, top_left, bottom_right, (0, 255, 0), 2)
-                    label = f"{obj_name} ({conf:.2f})"
-                    cv2.putText(sonar_image_cv, label, (top_left[0], top_left[1] - 10),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
-                else:
-                    print(f"Bounding box for {obj_name} is out of bounds: center_x={center_x}, center_y={center_y}")
-            else:
-                print(f"No range found for object {obj_name} with bearing {bearing}")
-                continue
+                    #cv2.rectangle(sonar_image_cv, top_left, bottom_right, (0, 255, 0), 2)
+                    #label = f"{obj_name}"
+                    #cv2.putText(sonar_image_cv, label, (top_left[0], top_left[1] - 10),
+                            #cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+                #else:
+                    #print(f"Bounding box for {obj_name} is out of bounds: center_x={center_x}, center_y={center_y}")
+            #else:
+                #print(f"No range found for object {obj_name} with bearing {bearing}")
+                #continue
 
         msg_sonar_detections = self.br.cv2_to_imgmsg(sonar_image_cv, encoding="bgr8")
         msg_sonar_detections.header.stamp = sonar_image.header.stamp
         self.sonar_img_pub.publish(msg_sonar_detections)
+
+#def get_detected_coordinates():
+        #global detected_coords
+        #return detected_coords
 
 if __name__ == "__main__":
     rospy.init_node("closed_set_detector")
