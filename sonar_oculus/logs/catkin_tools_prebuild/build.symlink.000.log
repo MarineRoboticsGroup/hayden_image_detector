@@ -1,0 +1,12 @@
+Symlinking /home/haydentedrake/catkin_ws/src/sonar_oculus/devel/./local_setup.bash
+Symlinking /home/haydentedrake/catkin_ws/src/sonar_oculus/devel/./_setup_util.py
+Symlinking /home/haydentedrake/catkin_ws/src/sonar_oculus/devel/./setup.sh
+Symlinking /home/haydentedrake/catkin_ws/src/sonar_oculus/devel/./setup.zsh
+Symlinking /home/haydentedrake/catkin_ws/src/sonar_oculus/devel/./cmake.lock
+Symlinking /home/haydentedrake/catkin_ws/src/sonar_oculus/devel/./local_setup.sh
+Symlinking /home/haydentedrake/catkin_ws/src/sonar_oculus/devel/./env.sh
+Symlinking /home/haydentedrake/catkin_ws/src/sonar_oculus/devel/./setup.bash
+Symlinking /home/haydentedrake/catkin_ws/src/sonar_oculus/devel/./local_setup.zsh
+Symlinking /home/haydentedrake/catkin_ws/src/sonar_oculus/devel/share/catkin_tools_prebuild/cmake/catkin_tools_prebuildConfig.cmake
+Symlinking /home/haydentedrake/catkin_ws/src/sonar_oculus/devel/share/catkin_tools_prebuild/cmake/catkin_tools_prebuildConfig-version.cmake
+Symlinking /home/haydentedrake/catkin_ws/src/sonar_oculus/devel/lib/pkgconfig/catkin_tools_prebuild.pc

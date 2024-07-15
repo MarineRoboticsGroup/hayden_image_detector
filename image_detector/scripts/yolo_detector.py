@@ -10,10 +10,19 @@ from ultralytics import YOLO
 from PIL import Image as PILImage
 from sensor_msgs.msg import Image as RosImage
 import sys
-print("PYTHONPATH:",sys.path)
 from sonar_oculus.msg import OculusPing
 import yaml
 from collections import deque
+import os
+
+oculus_viewer_path = os.path.expanduser('~/catkin_ws/src/sonar_oculus/scripts')
+if oculus_viewer_path not in sys.path:
+    sys.path.append(oculus_viewer_path)
+
+from oculus_viewer import generate_map_xy, ping_callback
+
+from sonar_oculus.msg import OculusPing
+import yaml
 
 print("CUDA Available:", torch.cuda.is_available())
 print("CUDA Device Count:", torch.cuda.device_count())
@@ -75,7 +84,7 @@ class ClosedSetDetector:
         self.model = YOLO(model_file)
         rospy.loginfo("Model loaded")
         self.img_pub = rospy.Publisher("/camera/yolo_img", RosImage, queue_size=10)
-        self.sonar_img_pub = rospy.Publisher("/camera/sonar_img", RosImage, queue_size=10)
+        self.sonar_img_pub = rospy.Publisher("/sonar_vertical/oculus_viewer/detections", RosImage, queue_size=10)
         self.br = CvBridge()
         rgb_topic = rospy.get_param("rgb_topic", "/usb_cam/image_raw_repub")
         depth_topic = rospy.get_param(
@@ -165,6 +174,8 @@ class ClosedSetDetector:
                 detected_coords = (center_x, center_y)
                 rospy.set_param('/detected_coords', detected_coords)
                 print(f"Detected coordinates set to parameter: {detected_coords}")
+
+                ping_callback(depth, self.sonar_img_pub, detected_coords)
 
         msg_sonar_detections = self.br.cv2_to_imgmsg(sonar_image_cv, encoding="bgr8")
         msg_sonar_detections.header.stamp = sonar_image.header.stamp

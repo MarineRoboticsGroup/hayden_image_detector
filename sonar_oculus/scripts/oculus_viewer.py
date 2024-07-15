@@ -51,7 +51,7 @@ def generate_map_xy(msg):
     map_x = np.asarray(f_bearings(b), dtype=np.float32)
 
 
-def ping_callback(msg):
+def ping_callback(msg, img_pub, detected_coords=None):
     print("Ping callback triggered")
     
     if raw:
@@ -60,7 +60,8 @@ def ping_callback(msg):
         img = cv2.applyColorMap(img, cm)
         img_msg = bridge.cv2_to_imgmsg(img, encoding="bgr8")
         img_msg.header.stamp = rospy.Time.now()
-        img_pub.publish(img_msg) 
+        img_pub.publish(img_msg)
+        print("Published raw sonar image") 
     else:
         generate_map_xy(msg)
 
@@ -73,7 +74,7 @@ def ping_callback(msg):
         time.sleep(0.5)
 
         print("Attempting to retrieve detected_coords from parameter server...")
-        detected_coords = rospy.get_param('/detected_coords', None)
+        #detected_coords = rospy.get_param('/detected_coords', None)
         print(f"Retrieved detected_coords: {detected_coords}")
         
         if detected_coords:
@@ -82,7 +83,7 @@ def ping_callback(msg):
             print(f"Image dimensions: width={img.shape[1]}, height={img.shape[0]}")
 
             if 0 <= center_x < img.shape[1] and 0 <= center_y < img.shape[0]:
-                cv2.circle(img, (center_x, center_y), 5, (0, 0, 255), -1)
+                cv2.circle(img, (center_x, center_y), 10, (255, 0, 0), -1)
                 print(f"Drawing dot at {detected_coords}")
             else:
                 print(f"Detected coordinates {detected_coords} are out of image bounds.")
@@ -95,6 +96,7 @@ def ping_callback(msg):
         img_msg = bridge.cv2_to_imgmsg(img, encoding="bgr8")
         img_msg.header.stamp = rospy.Time.now()
         img_pub.publish(img_msg) 
+        print("Published processed sonar image with detections")
 
 def config_callback(config, level):
     global cm, raw
@@ -102,15 +104,17 @@ def config_callback(config, level):
     raw = config['Polar']
     return config
 
-
-if __name__ == '__main__':
+def initialize_viewer():
     print("Initializing node...")
     rospy.init_node('oculus_viewer')
     print("Node initialized. Creating publisher...")
+    global img_pub
     img_pub = rospy.Publisher('/sonar_vertical/oculus_viewer/image', Image, queue_size=10)
     print("Publisher created. Subscribing to topic...")
     ping_sub = rospy.Subscriber('/sonar_vertical/oculus_node/ping', OculusPing, ping_callback, None, 10)
     print("Dynamic reconfigure server started. Spinning...")
     server = Server(ViewerConfig, config_callback)
 
+if __name__ == '__main__':
+    initialize_viewer()
     rospy.spin()
