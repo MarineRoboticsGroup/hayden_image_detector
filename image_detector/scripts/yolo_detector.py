@@ -146,7 +146,7 @@ class ClosedSetDetector:
 
         CAM_FOV = 80 #degrees
 
-        sonar_image_cv = self.br.imgmsg_to_cv2(sonar_image, desired_encoding="bgr8")
+        # sonar_image_cv = self.br.imgmsg_to_cv2(sonar_image, desired_encoding="bgr8")
 
         for class_id, bbox, conf in zip(class_ids, bboxes, confs):
             if class_id >= len(object_names):
@@ -176,9 +176,9 @@ class ClosedSetDetector:
 
                 ping_callback(depth, self.sonar_img_pub, detected_coords)
         
-        msg_sonar_detections = self.br.cv2_to_imgmsg(sonar_image_cv, encoding="bgr8")
-        msg_sonar_detections.header.stamp = sonar_image.header.stamp
-        self.sonar_img_pub.publish(msg_sonar_detections)
+        # msg_sonar_detections = self.br.cv2_to_imgmsg(sonar_image_cv, encoding="bgr8")
+        # msg_sonar_detections.header.stamp = sonar_image.header.stamp
+        # self.sonar_img_pub.publish(msg_sonar_detections)
 
 if __name__ == "__main__":
     rospy.init_node("closed_set_detector")
