@@ -120,10 +120,40 @@ class ClosedSetDetector:
         CONF_THRESH=0.5
         results = self.model(image_cv, verbose=False, conf=CONF_THRESH)[0]
         
+        #save_dir = "/home/haydentedrake/detection_sonar_pairs"  # Replace with your desired path
+        #os.makedirs(save_dir, exist_ok=True)
+
+        # Generate a unique folder for this pair of images
+        #timestamp = rgb.header.stamp.to_sec()
+        #session_dir = os.path.join(save_dir, f"session_{timestamp:.6f}")
+        #os.makedirs(session_dir, exist_ok=True)
+
         # Extract segmentation masks
-        if results.boxes is None:
-            print("NO DETECTIONS")
-            return
+        #if results.boxes is not None and len(results.boxes) > 0:
+            #for i, r in enumerate(results):
+                #im_array = r.plot()  # plot a BGR numpy array of predictions
+                #im = PILImage.fromarray(im_array[..., ::-1])  # RGB PIL image
+
+                # Save the YOLO detection image
+                #yolo_image_filename = os.path.join(session_dir, f"yolo_detection_{timestamp:.6f}.jpg")
+                #im.save(yolo_image_filename)
+                
+                #if os.path.exists(yolo_image_filename):
+                    #print(f"Verified YOLO detection image was saved: {yolo_image_filename}")
+                #else:
+                    #print(f"Failed to save YOLO detection image: {yolo_image_filename}")
+        #else:
+            #print("NO DETECTIONS")
+            #return
+
+        # Save the sonar image
+        #try:
+            #sonar_image_cv = self.br.imgmsg_to_cv2(sonar_image, desired_encoding="bgr8")
+            #raw_sonar_image_filename = os.path.join(session_dir, f"sonar_image_{timestamp:.6f}.png")
+            #cv2.imwrite(raw_sonar_image_filename, sonar_image_cv)
+            #print(f"Saved sonar image: {raw_sonar_image_filename}")
+        #except CvBridgeError as e:
+            #print(f"Failed to convert sonar image: {e}")
         
         # Show the results
         for r in results:
@@ -175,10 +205,6 @@ class ClosedSetDetector:
                 print(f"Detected coordinates set to parameter: {detected_coords}")
 
                 ping_callback(depth, self.sonar_img_pub, detected_coords)
-        
-        # msg_sonar_detections = self.br.cv2_to_imgmsg(sonar_image_cv, encoding="bgr8")
-        # msg_sonar_detections.header.stamp = sonar_image.header.stamp
-        # self.sonar_img_pub.publish(msg_sonar_detections)
 
 if __name__ == "__main__":
     rospy.init_node("closed_set_detector")
