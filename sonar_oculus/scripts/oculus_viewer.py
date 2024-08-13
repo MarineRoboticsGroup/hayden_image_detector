@@ -30,7 +30,8 @@ def generate_map_xy(msg):
     if _res == 0:
         raise ValueError("Resolution (_res) must not be zero")
     _rows = int(np.ceil(_height / _res))
-    _width = np.sin(to_rad(msg.bearings[-1] - msg.bearings[0]) / 2) * _height * 2
+    #_width = np.sin(to_rad(msg.bearings[-1] - msg.bearings[0]) / 2) * _height * 2
+    _width = msg.num_ranges * _res * np.sin(to_rad(msg.bearings[-1] - msg.bearings[0]) / 2) * 2
     _cols = int(np.ceil(_width / _res))
 
     if res == _res and height == _height and rows == _rows and width == _width and cols == _cols:
@@ -45,13 +46,21 @@ def generate_map_xy(msg):
     for i in range(rows):
         for j in range(cols):
             r = i * res
-            angle = msg.bearings[0] + j * (msg.bearings[-1] - msg.bearings[0]) / cols
-            x = r * np.cos(to_rad(angle))
-            y = r * np.sin(to_rad(angle))
-            map_x[i, j] = f_bearings(np.arctan2(y, x) * REVERSE_Z)
+            angle = msg.bearings[0] + (j * (msg.bearings[-1] - msg.bearings[0]) / cols)
+            x = r * np.cos(angle)
+            y = r * np.sin(angle)
+            
+            if _height <= 0:
+                raise ValueError("_height must be positive and non-zero.")
+
+            map_x[i, j] = 1 + (cols - 1) * (x/width + 0.5)
             map_y[i, j] = r / res
 
+            print(f"map_x: {map_x[i, j]}, map_y: {map_y[i, j]}")
+
+
     print(f"Generated map_x shape: {map_x.shape}, map_y shape: {map_y.shape}")
+
 
 def ping_callback(msg, img_pub, detected_coords=None):
     #global cm, raw
@@ -73,6 +82,8 @@ def ping_callback(msg, img_pub, detected_coords=None):
 
         img = bridge.imgmsg_to_cv2(msg.ping, desired_encoding='passthrough')
         print(f"Original ping image shape: {img.shape}")
+        print(f"Map_x shape: {map_x.shape}")
+        print(f"Map_y shape: {map_y.shape}")
         img = np.array(img, dtype=img.dtype, order='F')
 
         remapped_img = cv2.remap(img, map_x, map_y, cv2.INTER_LINEAR)

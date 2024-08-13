@@ -40,3 +40,4 @@ try:
         print("\n")
 except Exception as e:
     print(f"Display error: {e}")
+    
