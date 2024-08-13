@@ -28,10 +28,10 @@ except Exception as e:
     print(f"Display error: {e}")
 #
 #  Validate the model
-os.system('yolo task=detect mode=val model=runs/detect/train/weights/best.pt data=data.yaml')
+os.system('yolo task=detect mode=val model=runs/detect/train3/weights/best.pt data=data.yaml')
 
 # Predict using the trained model
-os.system('yolo task=detect mode=predict model=runs/detect/train3/weights/best.pt conf=0.25 source=/content/drive/MyDrive/YOLOv8/test/images')
+os.system('yolo task=detect mode=predict model=runs/detect/train3/weights/best.pt conf=0.25 source=/home/haydentedrake/sonar_data/test/images')
 
 # Display prediction results
 try:
