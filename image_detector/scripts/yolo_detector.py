@@ -12,6 +12,14 @@ from sensor_msgs.msg import Image as RosImage
 import sys
 import os
 from collections import deque
+from scipy.interpolate import interp1d
+import rospy
+import cv_bridge
+from sonar_oculus.msg import OculusPing
+from sensor_msgs.msg import Image
+from dynamic_reconfigure.server import Server
+from sonar_oculus.cfg import ViewerConfig
+import time
 
 oculus_viewer_path = os.path.expanduser('~/catkin_ws/src/sonar_oculus/scripts')
 if oculus_viewer_path not in sys.path:
@@ -29,6 +37,12 @@ if cuda_available and cuda_device_count > 0:
     print("Current CUDA Device:", torch.cuda.current_device())
     print("CUDA Device Name:", torch.cuda.get_device_name(0))
 
+bridge = cv_bridge.CvBridge()
+global res, height, rows, width, cols, map_x, map_y, f_bearings
+res, height, rows, width, cols = None, None, None, None, None
+map_x, map_y = None, None
+cm = 1
+f_bearings = None
 to_rad = lambda bearing: bearing * np.pi / 18000
 INTENSITY_THRESHOLD = 100
 
@@ -62,21 +76,6 @@ def ping_to_range(msg: OculusPing, angle: float) -> float:
     print(f"No return detected for angle: {angle_rad}")
     return None
 
-def smooth_bearing(bearing):
-    bearing_queue.append(bearing)
-    return sum(bearing_queue) / len(bearing_queue)
-
-def smooth_coordinates(obj_name, coords):
-    if obj_name not in coord_history:
-        coord_history[obj_name] = deque(maxlen=10)
-    coord_history[obj_name].append(coords)
-    avg_coords = np.mean(coord_history[obj_name], axis=0)
-    return int(avg_coords[0]), int(avg_coords[1])
-
-def smooth_range(range):
-    range_history.append(range)
-    return sum(range_history) / len(range_history)
-
 class ClosedSetDetector:
     def __init__(self) -> None:
         model_file = "/home/haydentedrake/Downloads/last.pt"
@@ -109,6 +108,13 @@ class ClosedSetDetector:
     def forward_pass(self, rgb, depth, sonar_image):
         print("IN CALLBACK")
         global detected_coords, res, height, rows, width, cols, map_x, map_y, f_bearings
+
+        generate_map_xy(depth)
+
+        if f_bearings is None:
+            rospy.logerr("f_bearings is not initialized! Check generate_map_xy.")
+            return 
+
         print("Processing images...")
 
         try:
@@ -120,42 +126,6 @@ class ClosedSetDetector:
         CONF_THRESH=0.5
         results = self.model(image_cv, verbose=False, conf=CONF_THRESH)[0]
         
-        #save_dir = "/home/haydentedrake/detection_sonar_pairs"  # Replace with your desired path
-        #os.makedirs(save_dir, exist_ok=True)
-
-        # Generate a unique folder for this pair of images
-        #timestamp = rgb.header.stamp.to_sec()
-        #session_dir = os.path.join(save_dir, f"session_{timestamp:.6f}")
-        #os.makedirs(session_dir, exist_ok=True)
-
-        # Extract segmentation masks
-        #if results.boxes is not None and len(results.boxes) > 0:
-            #for i, r in enumerate(results):
-                #im_array = r.plot()  # plot a BGR numpy array of predictions
-                #im = PILImage.fromarray(im_array[..., ::-1])  # RGB PIL image
-
-                # Save the YOLO detection image
-                #yolo_image_filename = os.path.join(session_dir, f"yolo_detection_{timestamp:.6f}.jpg")
-                #im.save(yolo_image_filename)
-                
-                #if os.path.exists(yolo_image_filename):
-                    #print(f"Verified YOLO detection image was saved: {yolo_image_filename}")
-                #else:
-                    #print(f"Failed to save YOLO detection image: {yolo_image_filename}")
-        #else:
-            #print("NO DETECTIONS")
-            #return
-
-        # Save the sonar image
-        #try:
-            #sonar_image_cv = self.br.imgmsg_to_cv2(sonar_image, desired_encoding="bgr8")
-            #raw_sonar_image_filename = os.path.join(session_dir, f"sonar_image_{timestamp:.6f}.png")
-            #cv2.imwrite(raw_sonar_image_filename, sonar_image_cv)
-            #print(f"Saved sonar image: {raw_sonar_image_filename}")
-        #except CvBridgeError as e:
-            #print(f"Failed to convert sonar image: {e}")
-        
-        # Show the results
         for r in results:
             im_array = r.plot()  # plot a BGR numpy array of predictions
             im = PILImage.fromarray(im_array[..., ::-1])  # RGB PIL image
@@ -168,15 +138,12 @@ class ClosedSetDetector:
             msg_yolo_detections.step = 3 * im.width
             msg_yolo_detections.data = np.array(im).tobytes()
             self.img_pub.publish(msg_yolo_detections)
-            # im.show()  # show image
-            # im.save('results.jpg')  # save image
+            
         class_ids = results.boxes.cls.data.cpu().numpy()
         bboxes = results.boxes.xywh.data.cpu().numpy()
         confs = results.boxes.conf.data.cpu().numpy()
 
         CAM_FOV = 80 #degrees
-
-        # sonar_image_cv = self.br.imgmsg_to_cv2(sonar_image, desired_encoding="bgr8")
 
         for class_id, bbox, conf in zip(class_ids, bboxes, confs):
             if class_id >= len(object_names):
@@ -187,18 +154,16 @@ class ClosedSetDetector:
             obj_name = object_names[class_id]
             obj_centroid = (bbox[0], bbox[1])  # x, y
             bearing = obj_centroid[0]/rgb.width * CAM_FOV - CAM_FOV/2
-            bearing = smooth_bearing(bearing)
             range = ping_to_range(depth, bearing)
 
             if range is not None and range > 0:
-                range = smooth_range(range)
                 angle = to_rad(bearing)
+                r = range / depth.range_resolution
                 x = range * np.cos(angle)
                 y = range * np.sin(angle)
                 
-                center_x = int(x / depth.range_resolution)
-                center_y = int((depth.num_ranges - (range / depth.range_resolution)))
-                center_x, center_y = smooth_coordinates(obj_name, (center_x, center_y))
+                center_x = int(f_bearings(angle))
+                center_y = int(r)
 
                 detected_coords = (center_x, center_y)
                 rospy.set_param('/detected_coords', detected_coords)
