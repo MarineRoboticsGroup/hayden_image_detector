@@ -137,13 +137,13 @@ class ClosedSetDetector:
         CAM_FOV = 80 #degrees
 
         # Turn depth ping into cv2 img, and annotate with detections from rgb.
-        # This image is rectungular, not triangular.
+        # This image is rectangular, not triangular.
 
         img = bridge.imgmsg_to_cv2(depth.ping, desired_encoding='passthrough')
         img = np.array(img, dtype=img.dtype, order='F')
         img_bgr = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
 
-        f_bearings, map_x, map_y = generate_map_xy(msg=depth)
+        bearing_to_colindex, map_x, map_y = generate_map_xy(msg=depth)
 
         for class_id, bbox, conf in zip(class_ids, bboxes, confs):
             if class_id >= len(object_names):
@@ -152,17 +152,17 @@ class ClosedSetDetector:
             
             class_id = int(class_id)
             obj_name = object_names[class_id]
-            obj_centroid = (bbox[0], bbox[1])  # x, y
+            # bbox = [x, y, width, height] in rgb image coordinates
+            obj_centroid = (bbox[0] + bbox[2]/2, bbox[1] + bbox[3]/2)  # x, y
             bearing = obj_centroid[0]/rgb.width * CAM_FOV - CAM_FOV/2
             range = ping_to_range(depth, bearing)
 
             if range is not None and range > 0:
                 angle = to_rad(bearing)
                 r = range / depth.range_resolution
-                x = range * np.cos(angle)
-                y = range * np.sin(angle)
                 
-                center_x = int(f_bearings(angle))
+                # centroid in depth image coordinates.
+                center_x = int(bearing_to_colindex(angle))
                 center_y = int(r)
 
                 detected_coords = (center_x, center_y)

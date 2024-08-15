@@ -34,14 +34,7 @@ def generate_map_xy(msg):
 
     bearings = to_rad(np.asarray(msg.bearings, dtype=np.float32))
     
-    f_bearings = interp1d(bearings, range(len(bearings)), kind='linear', fill_value='extrapolate')
-
-    try:
-        f_bearings = interp1d(bearings, range(len(bearings)), kind='linear', fill_value='extrapolate')
-        print("f_bearings initialized successfully.")
-    except Exception as e:
-        print(f"Error initializing f_bearings: {e}")
-        f_bearings = None
+    bearing_to_colindex = interp1d(bearings, range(len(bearings)), kind='linear', fill_value='extrapolate')
 
     XX, YY = np.meshgrid(range(cols), range(rows))
     x = res * (rows - YY)
@@ -49,8 +42,8 @@ def generate_map_xy(msg):
     b = np.arctan2(y, x) * -1
     r = np.sqrt(np.square(x) + np.square(y))
     map_y = np.asarray(r / res, dtype=np.float32)
-    map_x = np.asarray(f_bearings(b), dtype=np.float32)
-    return f_bearings, map_x, map_y
+    map_x = np.asarray(bearing_to_colindex(b), dtype=np.float32)
+    return bearing_to_colindex, map_x, map_y
 
 def add_detection(img, detected_coords):
     center_x, center_y = detected_coords
