@@ -11,15 +11,12 @@ from sonar_oculus.cfg import ViewerConfig
 import time
 
 bridge = cv_bridge.CvBridge()
-global res, height, rows, width, cols, map_x, map_y, f_bearings
+global res, height, rows, width, cols
 res, height, rows, width, cols = None, None, None, None, None
-f_bearings = None
-map_x, map_y = None, None
 cm = 1
 to_rad = lambda bearing: bearing * np.pi / 18000
 
 def generate_map_xy(msg):
-    global f_bearings
     print("generate_map_xy is being triggered")
 
     _res = msg.range_resolution
@@ -31,12 +28,11 @@ def generate_map_xy(msg):
     _width = np.sin(to_rad(msg.bearings[-1] - msg.bearings[0]) / 2) * _height * 2 #msg.num_ranges * _res * np.sin(to_rad(msg.bearings[-1] - msg.bearings[0]) / 2) * 2
     _cols = int(np.ceil(_width / _res))
 
-    global res, height, rows, width, cols, map_x, map_y
+    global res, height, rows, width, cols
     res, height, rows, width, cols = _res, _height, _rows, _width, _cols
     print(f"Map dimensions set. rows: {rows}, cols: {cols}")
 
     bearings = to_rad(np.asarray(msg.bearings, dtype=np.float32))
-    print(f"Bearings (radians): {bearings}")
     
     f_bearings = interp1d(bearings, range(len(bearings)), kind='linear', fill_value='extrapolate')
 
@@ -54,13 +50,24 @@ def generate_map_xy(msg):
     r = np.sqrt(np.square(x) + np.square(y))
     map_y = np.asarray(r / res, dtype=np.float32)
     map_x = np.asarray(f_bearings(b), dtype=np.float32)
+    return f_bearings, map_x, map_y
 
-def ping_callback(msg, img_pub, detected_coords=None):
+def add_detection(img, detected_coords):
+    center_x, center_y = detected_coords
+    print(f"Detected coordinates retrieved: ({center_x}, {center_y})")
+
+    if 0 <= center_x < img.shape[1] and 0 <= center_y < img.shape[0]:
+        cv2.circle(img, (center_x, center_y), 10, (255, 255, 255), -1)
+        print(f"Drawing dot at {detected_coords}")
+    else:
+        print(f"Detected coordinates {detected_coords} are out of image bounds.")
+
+    return img
+
+
+def publish_detections(img, img_pub, map_x, map_y):
     print("ping callback triggered")
     
-    img = bridge.imgmsg_to_cv2(msg.ping, desired_encoding='passthrough')
-    img = np.array(img, dtype=img.dtype, order='F')
-
     remapped_img = cv2.remap(img, map_x, map_y, cv2.INTER_LINEAR)
         
     # Resize the remapped image to the expected output size if necessary
@@ -68,30 +75,14 @@ def ping_callback(msg, img_pub, detected_coords=None):
         remapped_img = cv2.resize(remapped_img, (cols, rows))
         print(f"Resized remapped image shape: {remapped_img.shape}")
 
-    # If detected coordinates are provided, annotate the image
-    if detected_coords:
-        center_x, center_y = detected_coords
-        print(f"Detected coordinates retrieved: ({center_x}, {center_y})")
-
-        if 0 <= center_x < remapped_img.shape[1] and 0 <= center_y < remapped_img.shape[0]:
-            remapped_img_bgr = cv2.cvtColor(remapped_img, cv2.COLOR_GRAY2BGR)
-            cv2.circle(remapped_img_bgr, (center_x, center_y), 10, (255, 0, 0), -1)
-            print(f"Drawing dot at {detected_coords}")
-        else:
-            print(f"Detected coordinates {detected_coords} are out of image bounds.")
-    else:
-        print("No detected coordinates found.")
-        # Convert the remapped image to BGR for consistency
-        remapped_img_bgr = cv2.cvtColor(remapped_img, cv2.COLOR_GRAY2BGR)
-
     # Normalize the image to enhance contrast
-    remapped_img_bgr = cv2.normalize(remapped_img_bgr, None, alpha=0, beta=255, norm_type=cv2.NORM_MINMAX)
+    remapped_img = cv2.normalize(remapped_img, None, alpha=0, beta=255, norm_type=cv2.NORM_MINMAX)
     
     # Apply the color map if necessary
-    remapped_img_bgr = cv2.applyColorMap(remapped_img_bgr, cm)
+    remapped_img = cv2.applyColorMap(remapped_img, cm)
 
     # Convert the annotated or processed image back to a ROS message
-    img_msg = bridge.cv2_to_imgmsg(remapped_img_bgr, encoding="bgr8")
+    img_msg = bridge.cv2_to_imgmsg(remapped_img, encoding="bgr8")
     img_msg.header.stamp = rospy.Time.now()
 
     # Publish the image message

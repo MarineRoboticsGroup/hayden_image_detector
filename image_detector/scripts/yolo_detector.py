@@ -25,7 +25,7 @@ oculus_viewer_path = os.path.expanduser('~/catkin_ws/src/sonar_oculus/scripts')
 if oculus_viewer_path not in sys.path:
     sys.path.append(oculus_viewer_path)
 
-from oculus_viewer import generate_map_xy, ping_callback
+from oculus_viewer import generate_map_xy, publish_detections, add_detection
 
 from sonar_oculus.msg import OculusPing
 
@@ -38,11 +38,9 @@ if cuda_available and cuda_device_count > 0:
     print("CUDA Device Name:", torch.cuda.get_device_name(0))
 
 bridge = cv_bridge.CvBridge()
-global res, height, rows, width, cols, map_x, map_y, f_bearings
+global res, height, rows, width, cols
 res, height, rows, width, cols = None, None, None, None, None
-map_x, map_y = None, None
 cm = 1
-f_bearings = None
 to_rad = lambda bearing: bearing * np.pi / 18000
 INTENSITY_THRESHOLD = 100
 
@@ -51,10 +49,8 @@ object_names = ['80-20', 'fish-cage', 'hand-net', 'ladder', 'lobster-cages', 'pa
 bearing_queue = deque(maxlen=10)
 coord_history = {}
 range_history = deque(maxlen=10)
-detected_coords = None
 
 def ping_to_range(msg: OculusPing, angle: float) -> float:
-    global bridge
     img = bridge.imgmsg_to_cv2(msg.ping, desired_encoding="passthrough")
     print(f"Ping image shape: {img.shape}")
     angle_rad = angle * np.pi / 180 # convert to radians
@@ -107,14 +103,9 @@ class ClosedSetDetector:
 
     def forward_pass(self, rgb, depth, sonar_image):
         print("IN CALLBACK")
-        global detected_coords, res, height, rows, width, cols, map_x, map_y, f_bearings
+        global res, height, rows, width, cols
 
-        generate_map_xy(depth)
-
-        if f_bearings is None:
-            rospy.logerr("f_bearings is not initialized! Check generate_map_xy.")
-            return 
-
+        # Pass rgb image to yolo, and get bbox detections.
         print("Processing images...")
 
         try:
@@ -145,6 +136,15 @@ class ClosedSetDetector:
 
         CAM_FOV = 80 #degrees
 
+        # Turn depth ping into cv2 img, and annotate with detections from rgb.
+        # This image is rectungular, not triangular.
+
+        img = bridge.imgmsg_to_cv2(depth.ping, desired_encoding='passthrough')
+        img = np.array(img, dtype=img.dtype, order='F')
+        img_bgr = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
+
+        f_bearings, map_x, map_y = generate_map_xy(msg=depth)
+
         for class_id, bbox, conf in zip(class_ids, bboxes, confs):
             if class_id >= len(object_names):
                 print(f"Class ID {class_id} out of range")
@@ -168,8 +168,11 @@ class ClosedSetDetector:
                 detected_coords = (center_x, center_y)
                 rospy.set_param('/detected_coords', detected_coords)
                 print(f"Detected coordinates set to parameter: {detected_coords}")
+                img_bgr = add_detection(img=img_bgr, detected_coords=detected_coords)
 
-                ping_callback(depth, self.sonar_img_pub, detected_coords)
+        # Convert rectangular depth image into triangular and publish back to ROS (w/ detections).
+
+        publish_detections(img_bgr, self.sonar_img_pub, map_x, map_y)
 
 if __name__ == "__main__":
     rospy.init_node("closed_set_detector")
