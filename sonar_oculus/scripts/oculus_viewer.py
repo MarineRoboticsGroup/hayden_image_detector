@@ -46,16 +46,10 @@ def generate_map_xy(msg):
     map_x = np.asarray(bearing_to_colindex(b), dtype=np.float32)
     return bearing_to_colindex, map_x, map_y
 
-def add_detection(img, detected_coords):
-    center_x, center_y = detected_coords
-    print(f"Detected coordinates retrieved: ({center_x}, {center_y})")
-
-    if 0 <= center_x < img.shape[1] and 0 <= center_y < img.shape[0]:
-        cv2.circle(img, (center_x, center_y), 10, (255, 255, 255), -1)
-        print(f"Drawing dot at {detected_coords}")
-    else:
-        print(f"Detected coordinates {detected_coords} are out of image bounds.")
-
+def add_detection(img, depth_bbox, label):
+    top_corner = [depth_bbox[0] + depth_bbox[2], depth_bbox[1] + depth_bbox[3]]
+    cv2.rectangle(img, pt1=[depth_bbox[0], depth_bbox[1]], pt2=top_corner, color=(255, 255, 255), thickness=2)
+    cv2.putText(img, label, org=[depth_bbox[0], top_corner[1]+2], fontFace=cv2.FONT_HERSHEY_SIMPLEX, fontScale=-1.0, color=(255, 255, 255))
     return img
 
 

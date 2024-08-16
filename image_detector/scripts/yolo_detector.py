@@ -13,6 +13,7 @@ import sys
 import os
 from collections import deque
 from scipy.interpolate import interp1d
+from scipy.signal import savgol_filter
 import rospy
 import cv_bridge
 from sonar_oculus.msg import OculusPing
@@ -42,7 +43,7 @@ global res, height, rows, width, cols
 res, height, rows, width, cols = None, None, None, None, None
 cm = 1
 to_rad = lambda bearing: bearing * np.pi / 180
-INTENSITY_THRESHOLD = 100
+INTENSITY_THRESHOLD = 70
 
 object_names = ['80-20', 'fish-cage', 'hand-net', 'ladder', 'lobster-cages', 'paddle', 'pipe', 'recycling-bin', 'seaweed', 'stairs', 'tire', 'towfish', 'trash-bin']
 
@@ -63,14 +64,23 @@ def ping_to_range(msg: OculusPing, angle: float) -> float:
         return None
 
     closest_beam = np.argmin(np.abs(az - angle_rad))
+    # filter range returns along closest beam
+    filtered_ranges = savgol_filter(img[:, closest_beam], 21, 3)
+
     # image is num_ranges x num_beams
-    for idx in range(len(img[:, closest_beam])):
-        if img[idx, closest_beam] > INTENSITY_THRESHOLD:
-            br = idx * msg.range_resolution
-            print(f"Return detected: beam={closest_beam}, idx={idx}, range={br}, intensity={img[idx, closest_beam]}")
-            return br
+    min_range = 0
+    max_range = msg.fire_msg.range
+    found_min = False
+    for idx, range in enumerate(filtered_ranges):
+        if not found_min and range > INTENSITY_THRESHOLD:
+            min_range = idx * msg.range_resolution
+            found_min = True
+        if found_min and range < INTENSITY_THRESHOLD:
+            max_range = idx * msg.range_resolution
+            print(f"Return detected: beam={closest_beam}, range=[{min_range}, {max_range}]") #, intensity={img[idx, closest_beam]}")
+            return min_range,max_range
     print(f"No return detected for angle: {angle_rad}")
-    return None
+    return None, None
 
 class ClosedSetDetector:
     def __init__(self) -> None:
@@ -145,6 +155,7 @@ class ClosedSetDetector:
 
         bearing_to_colindex, map_x, map_y = generate_map_xy(msg=depth)
 
+        has_detections = False
         for class_id, bbox, conf in zip(class_ids, bboxes, confs):
             if class_id >= len(object_names):
                 print(f"Class ID {class_id} out of range")
@@ -153,32 +164,41 @@ class ClosedSetDetector:
             class_id = int(class_id)
             obj_name = object_names[class_id]
             # bbox = [x, y, width, height] in rgb image coordinates
-            obj_centroid = (bbox[0] + bbox[2]/2, bbox[1] + bbox[3]/2)  # x, y
-            print(f"obj_centroid: {obj_centroid}")
-            print(f"img.shape = {img.shape}")
-            bearing = obj_centroid[0]/rgb.width * CAM_FOV - (CAM_FOV/2)
-            range = ping_to_range(depth, bearing)
-            print(f"Bearing (degrees): {bearing}")
+            def x_img_to_depth(x_img):
+                x_deg = x_img/rgb.width * CAM_FOV - (CAM_FOV/2)
+                x_rad = to_rad(x_deg) * -1.0
+                x_depth = int(bearing_to_colindex(x_rad))
+                return x_depth
+            
+            def range_to_y_depth(range):
+                return int(range / depth.range_resolution)
 
-            if range is not None and range > 0:
-                angle = to_rad(bearing) * -1
-                r = range / depth.range_resolution
-                
-                # centroid in depth image coordinates.
+            # Compute min/max range by looking only along center of detection
+            center_x_img = bbox[0] + bbox[2]/2.0
+            center_x_depth = x_img_to_depth(center_x_img)
+            print(f"center_x_depth = {center_x_depth}")
+            min_range, max_range = ping_to_range(depth, center_x_depth)
 
-                print(f"angle = {angle}, bearing_to_colindex(angle) = {bearing_to_colindex(angle)}")
+            if min_range is not None and min_range > 0:
+                min_x_depth = x_img_to_depth(bbox[0])
+                max_x_depth = x_img_to_depth(bbox[0] + bbox[3])
+                min_y_depth = range_to_y_depth(min_range)
+                min_box_height = 5 # in pixels
+                max_y_depth = max(range_to_y_depth(max_range), min_y_depth + min_box_height) #
 
-                center_x = int(bearing_to_colindex(angle))
-                center_y = int(r)
+                # x, y, width, height
+                depth_bbox = [min_x_depth, min_y_depth, max_x_depth - min_x_depth, max_y_depth - min_y_depth]                
 
-                detected_coords = (center_x, center_y)
-                rospy.set_param('/detected_coords', detected_coords)
-                print(f"Detected coordinates set to parameter: {detected_coords}")
-                img_bgr = add_detection(img=img_bgr, detected_coords=detected_coords)
+                rospy.set_param('/detected_coords', depth_bbox)
+                print(f"Detected coordinates set to parameter: {depth_bbox}")
+                img_bgr = add_detection(img=img_bgr, depth_bbox=depth_bbox, label=obj_name)
+                has_detections = True
 
         # Convert rectangular depth image into triangular and publish back to ROS (w/ detections).
 
         publish_detections(img_bgr, self.sonar_img_pub, map_x, map_y)
+#        if has_detections:
+#            exit()
 
 if __name__ == "__main__":
     rospy.init_node("closed_set_detector")
