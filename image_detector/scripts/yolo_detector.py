@@ -41,7 +41,7 @@ bridge = cv_bridge.CvBridge()
 global res, height, rows, width, cols
 res, height, rows, width, cols = None, None, None, None, None
 cm = 1
-to_rad = lambda bearing: bearing * np.pi / 18000
+to_rad = lambda bearing: bearing * np.pi / 180
 INTENSITY_THRESHOLD = 100
 
 object_names = ['80-20', 'fish-cage', 'hand-net', 'ladder', 'lobster-cages', 'paddle', 'pipe', 'recycling-bin', 'seaweed', 'stairs', 'tire', 'towfish', 'trash-bin']
@@ -53,7 +53,7 @@ range_history = deque(maxlen=10)
 def ping_to_range(msg: OculusPing, angle: float) -> float:
     img = bridge.imgmsg_to_cv2(msg.ping, desired_encoding="passthrough")
     print(f"Ping image shape: {img.shape}")
-    angle_rad = angle * np.pi / 180 # convert to radians
+    angle_rad = to_rad(angle) # convert to radians
     r = np.linspace(0, msg.fire_msg.range, num=msg.num_ranges)
     az = to_rad(np.asarray(msg.bearings, dtype=np.float32))
     print(f"Angle (radians): {angle_rad}, Azimuth range: {az[0]} to {az[-1]}")
@@ -154,14 +154,20 @@ class ClosedSetDetector:
             obj_name = object_names[class_id]
             # bbox = [x, y, width, height] in rgb image coordinates
             obj_centroid = (bbox[0] + bbox[2]/2, bbox[1] + bbox[3]/2)  # x, y
-            bearing = obj_centroid[0]/rgb.width * CAM_FOV - CAM_FOV/2
+            print(f"obj_centroid: {obj_centroid}")
+            print(f"img.shape = {img.shape}")
+            bearing = obj_centroid[0]/rgb.width * CAM_FOV - (CAM_FOV/2)
             range = ping_to_range(depth, bearing)
+            print(f"Bearing (degrees): {bearing}")
 
             if range is not None and range > 0:
-                angle = to_rad(bearing)
+                angle = to_rad(bearing) * -1
                 r = range / depth.range_resolution
                 
                 # centroid in depth image coordinates.
+
+                print(f"angle = {angle}, bearing_to_colindex(angle) = {bearing_to_colindex(angle)}")
+
                 center_x = int(bearing_to_colindex(angle))
                 center_y = int(r)
 

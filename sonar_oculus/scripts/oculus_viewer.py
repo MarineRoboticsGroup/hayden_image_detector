@@ -35,6 +35,7 @@ def generate_map_xy(msg):
     bearings = to_rad(np.asarray(msg.bearings, dtype=np.float32))
     
     bearing_to_colindex = interp1d(bearings, range(len(bearings)), kind='linear', fill_value='extrapolate')
+    print(f"bearing_to_colindex: {bearing_to_colindex} expected range: 0 to {cols-1}")
 
     XX, YY = np.meshgrid(range(cols), range(rows))
     x = res * (rows - YY)
